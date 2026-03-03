@@ -853,9 +853,10 @@ def main():
 
     if not pdfs_all:
         print(
-            "No PDFs found in ./pdfs_folder. Put your invoices there and run again."
+            "No PDFs found in ./pdfs_folder. Put your invoices there and run again.\n"
         )
         logging.info("No PDFs to process")
+        input("Press Enter to close...")
         return
 
     pdfs = pdfs_all[: max(1, int(BATCH_SIZE))]
@@ -948,4 +949,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n[ERROR] {e}")
+        logging.error("Unhandled exception in main", exc_info=True)
+    print("\n")
+    input("Press Enter to close this window...")
