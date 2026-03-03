@@ -21,7 +21,7 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --onefile --name TiffinBillSender --clean --noconfirm main.py
+          pyinstaller --onefile --name TiffinBillSender --clean --noconfirm --hidden-import=selenium.webdriver.chrome.webdriver --hidden-import=selenium.webdriver.chrome.service --hidden-import=selenium.webdriver.chrome.options --hidden-import=selenium.webdriver.common.by --hidden-import=selenium.webdriver.common.keys --hidden-import=selenium.webdriver.common.action_chains --hidden-import=selenium.webdriver.support.ui --hidden-import=selenium.webdriver.support.expected_conditions --hidden-import=selenium.webdriver.support.wait --hidden-import=selenium.webdriver.remote.webdriver --hidden-import=selenium.webdriver.remote.webelement --hidden-import=selenium.webdriver.common.desired_capabilities --hidden-import=webdriver_manager.chrome --collect-all=selenium --collect-all=webdriver_manager main.py
 
       - name: Package deliverable
         run: |

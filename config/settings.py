@@ -23,7 +23,7 @@ DOCUMENT_CAPTION = ""
 COUNTRY_CODE = "91"
 
 # -------- Browser selection --------
-BROWSER = "brave"      # "chrome" or "brave"
+BROWSER = "chrome"      # "chrome" or "brave"
 CHROME_PATH = ""        # leave empty to auto-detect
 BRAVE_PATH = ""         # leave empty to auto-detect
 CHROMEDRIVER_PATH = ""  # leave empty to let Selenium Manager fetch automatically
