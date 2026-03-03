@@ -361,13 +361,32 @@ ATTACH_BTN_SELECTORS = [
     "button[title='Attach']",
 ]
 
-DOC_OPTION_SELECTORS = [
+DOC_OPTION_CSS_SELECTORS = [
     # Click the "Document" menu item after opening the attach menu
+    "[data-testid='mi-attach-document']",
     "[data-testid='attach-document']",
     "span[data-testid='attach-document']",
+    "span[data-icon='attach-document']",
+    "span[data-icon='doc']",
     "button[aria-label='Document']",
     "li[data-animate-dropdown-item='true'] span[data-icon='attach-document']",
     "div[aria-label='Document']",
+    "li button[aria-label='Document']",
+    # Generic menu item selectors
+    "li[data-animate-dropdown-item] button",
+]
+
+DOC_OPTION_XPATH_SELECTORS = [
+    # XPath text-based selectors (language-independent fallbacks)
+    "//span[text()='Document']",
+    "//button[.//span[text()='Document']]",
+    "//li[.//span[text()='Document']]",
+    "//div[text()='Document']",
+    "//span[contains(text(),'Document')]",
+    "//span[contains(text(),'document')]",
+    # Try the first menu item (Document is usually first)
+    "(//li[@data-animate-dropdown-item='true'])[1]",
+    "(//li[@role='button' or @role='menuitem'])[1]",
 ]
 
 SEND_BTN_SELECTORS = [
@@ -398,22 +417,75 @@ def click_attach_menu(driver):
 
 def _click_document_option(driver):
     """
-    NEW STEP: After opening the attach menu, click the 'Document' option.
-    In older WhatsApp Web this was not needed because all file inputs were
-    already accessible. Newer versions require clicking Document first.
+    After opening the attach menu, click the 'Document' option.
+    Uses multiple strategies: CSS selectors, XPath, and JS text search.
     """
-    for sel in DOC_OPTION_SELECTORS:
+    time.sleep(1)  # Wait for menu animation to complete
+
+    # Strategy 1: CSS selectors
+    for sel in DOC_OPTION_CSS_SELECTORS:
         try:
-            btn = WebDriverWait(driver, 3).until(
+            btn = WebDriverWait(driver, 2).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
             )
             btn.click()
-            log_step("DOC_OPTION_CLICKED", selector=sel)
+            log_step("DOC_OPTION_CLICKED_CSS", selector=sel)
             time.sleep(0.5)
             return True
         except Exception:
             continue
-    # Not all WhatsApp Web versions require this step – that's OK
+
+    # Strategy 2: XPath selectors (text-based)
+    for sel in DOC_OPTION_XPATH_SELECTORS:
+        try:
+            btn = WebDriverWait(driver, 2).until(
+                EC.element_to_be_clickable((By.XPATH, sel))
+            )
+            btn.click()
+            log_step("DOC_OPTION_CLICKED_XPATH", selector=sel)
+            time.sleep(0.5)
+            return True
+        except Exception:
+            continue
+
+    # Strategy 3: JavaScript — find by text content "Document"
+    try:
+        clicked = driver.execute_script("""
+            // Look for any clickable element containing "Document" text
+            var items = document.querySelectorAll('li, button, div[role="button"], span');
+            for (var i = 0; i < items.length; i++) {
+                var el = items[i];
+                var text = (el.textContent || '').trim();
+                if (text === 'Document' || text === 'document') {
+                    el.click();
+                    return 'JS_TEXT:' + el.tagName + ':' + text;
+                }
+            }
+            // Also try finding by aria-label
+            var labeled = document.querySelectorAll('[aria-label*="ocument"]');
+            if (labeled.length > 0) { labeled[0].click(); return 'JS_ARIA:' + labeled[0].tagName; }
+            return null;
+        """)
+        if clicked:
+            log_step("DOC_OPTION_CLICKED_JS", method=clicked)
+            time.sleep(0.5)
+            return True
+    except Exception:
+        pass
+
+    # Strategy 4: Click the first menu item (Document is usually first in the list)
+    try:
+        items = driver.find_elements(By.CSS_SELECTOR,
+            "ul li, div[role='listbox'] > div, div[role='menu'] > div, "
+            "[data-animate-dropdown-item], li[tabindex]")
+        if items:
+            items[0].click()
+            log_step("DOC_OPTION_CLICKED_FIRST_ITEM", count=len(items))
+            time.sleep(0.5)
+            return True
+    except Exception:
+        pass
+
     log_step("DOC_OPTION_NOT_FOUND_CONTINUING")
     return False
 
@@ -424,7 +496,10 @@ def locate_document_input_in_menu(driver):
     # Strategy 1: Try exact accept='*' selector (document input)
     exact_selectors = [
         "input[type='file'][accept='*']",
-        "input[type='file']:not([accept='image/*'])",
+        "input[type='file'][accept='*/*']",
+        "input[type='file'][accept='application/*']",
+        "input[type='file'][accept='.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar']",
+        "input[type='file']:not([accept*='image']):not([accept*='video'])",
     ]
     for sel in exact_selectors:
         try:
@@ -435,20 +510,28 @@ def locate_document_input_in_menu(driver):
         except Exception:
             pass
 
-    # Strategy 2: Find all file inputs, filter out image/video ones
+    # Strategy 2: Find all file inputs, log them, filter out image/video
     inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+    log_step("FILE_INPUTS_SCAN", total=len(inputs))
     chosen = None
     for el in inputs:
         try:
             acc = (el.get_attribute("accept") or "").lower()
         except Exception:
             acc = ""
+        log_step("FILE_INPUT_DETAIL", accept=acc)
         # skip image-only or video-only inputs
         if "image" in acc or "video" in acc:
             continue
         # prefer inputs that accept documents
         if "application" in acc or ".pdf" in acc or "*" in acc or acc == "":
             chosen = el
+
+    # Strategy 3: If nothing found, take ANY file input as last resort
+    if chosen is None and inputs:
+        log_step("FILE_INPUT_USING_ANY_AVAILABLE")
+        chosen = inputs[-1]  # last one is often the document input
+
     return chosen
 
 
@@ -575,16 +658,27 @@ def attach_document_with_caption_and_send(driver, pdf_path, caption_text):
     if not ok:
         return False
 
-    # 2. NEW: Click the "Document" option inside the menu
-    _click_document_option(driver)
+    # 2. Click the "Document" option inside the menu
+    doc_clicked = _click_document_option(driver)
 
-    # 3. Locate the document file input (retry up to 10 times)
+    # 3. Locate the document file input (retry up to 15 times with longer waits)
     file_input = None
-    for _ in range(10):
+    for attempt in range(15):
         file_input = locate_document_input_in_menu(driver)
         if file_input:
             break
-        time.sleep(0.2)
+        time.sleep(0.5)
+        # If Document option wasn't found and still no input after a few tries,
+        # try clicking the attach menu again and re-attempt
+        if attempt == 7 and not doc_clicked:
+            log_step("RETRYING_ATTACH_FLOW")
+            try:
+                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                time.sleep(0.5)
+            except Exception:
+                pass
+            click_attach_menu(driver)
+            _click_document_option(driver)
 
     if not file_input:
         log_step("FILE_INPUT_NOT_FOUND")
