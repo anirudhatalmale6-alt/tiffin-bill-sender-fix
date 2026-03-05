@@ -229,6 +229,26 @@ def move_to_not_sent(pdf_path):
 # ---------------------------------------------------------------------------
 # Driver setup
 # ---------------------------------------------------------------------------
+def _clean_profile_locks(profile_dir):
+    """Remove Chrome profile lock files that prevent a new session."""
+    abs_dir = os.path.abspath(profile_dir)
+    for lock_name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        lock_path = os.path.join(abs_dir, lock_name)
+        try:
+            if os.path.exists(lock_path):
+                os.remove(lock_path)
+                log_step("PROFILE_LOCK_REMOVED", file=lock_name)
+        except Exception:
+            pass
+    # Also clean Default/Preferences lock if it exists
+    prefs_lock = os.path.join(abs_dir, "Default", "Preferences.lock")
+    try:
+        if os.path.exists(prefs_lock):
+            os.remove(prefs_lock)
+    except Exception:
+        pass
+
+
 def setup_driver():
     opts = ChromeOptions()
     browser = (BROWSER or "chrome").lower().strip()
@@ -249,12 +269,21 @@ def setup_driver():
     else:
         raise RuntimeError("BROWSER must be 'chrome' or 'brave' in config/settings.py")
 
-    os.makedirs(profile_dir, exist_ok=True)
-    opts.add_argument(f"--user-data-dir={os.path.abspath(profile_dir)}")
+    abs_profile = os.path.abspath(profile_dir)
+    os.makedirs(abs_profile, exist_ok=True)
+    # Ensure Default subdirectory exists (Chrome needs it for prefs file)
+    os.makedirs(os.path.join(abs_profile, "Default"), exist_ok=True)
+    # Clean stale lock files from previous runs
+    _clean_profile_locks(abs_profile)
+
+    opts.add_argument(f"--user-data-dir={abs_profile}")
     opts.add_argument("--profile-directory=Default")
     opts.add_argument("--disable-notifications")
     opts.add_argument("--lang=en-US")
     opts.add_argument("--start-maximized")
+    opts.add_argument("--no-first-run")
+    opts.add_argument("--no-default-browser-check")
+    opts.add_argument("--disable-background-timer-throttling")
     opts.page_load_strategy = "eager"
 
     if HEADLESS:
@@ -593,21 +622,61 @@ def focus_caption_box(driver):
     return None
 
 
-def click_send_button(driver):
-    """Click the Send button (works for both preview screen and chat)."""
+def click_send_button(driver, already_found_btn=None):
+    """Click the Send button (works for both preview screen and chat).
+    If already_found_btn is provided, try clicking it first via JS."""
+
+    # --- FAST PATH: click the button we already found ---
+    if already_found_btn is not None:
+        try:
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center'})", already_found_btn
+            )
+            time.sleep(0.3)
+            driver.execute_script("arguments[0].click()", already_found_btn)
+            log_step("SEND_BTN_DIRECT_JS_CLICK")
+            return True
+        except Exception:
+            pass
+        try:
+            already_found_btn.click()
+            log_step("SEND_BTN_DIRECT_CLICK")
+            return True
+        except Exception:
+            pass
+        # Try clicking the parent (in case btn is a span inside a div)
+        try:
+            driver.execute_script(
+                "var p = arguments[0].closest('div[role=\"button\"]') || arguments[0].parentElement;"
+                "if(p) p.click();",
+                already_found_btn,
+            )
+            log_step("SEND_BTN_PARENT_CLICK")
+            return True
+        except Exception:
+            pass
+
+    # --- SLOW PATH: search for the button with short timeouts ---
     for sel in SEND_BTN_SELECTORS:
         try:
-            btn = WebDriverWait(
-                driver, SEND_ATTEMPT_TIMEOUT, poll_frequency=PREVIEW_POLL_SECONDS
-            ).until(EC.element_to_be_clickable((By.CSS_SELECTOR, sel)))
-            btn.click()
-            log_step("SEND_BTN_CLICKED", selector=sel)
-            return True
-        except ElementClickInterceptedException:
+            btn = WebDriverWait(driver, 5, poll_frequency=0.3).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, sel))
+            )
+            # Try JS click first (most reliable for WA Web)
             try:
-                btn = driver.find_element(By.CSS_SELECTOR, sel)
-                driver.execute_script("arguments[0].click();", btn)
-                log_step("SEND_BTN_JS_CLICK", selector=sel)
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'})", btn
+                )
+                time.sleep(0.2)
+                driver.execute_script("arguments[0].click()", btn)
+                log_step("SEND_BTN_CLICKED", selector=sel)
+                return True
+            except Exception:
+                pass
+            # Try regular click
+            try:
+                btn.click()
+                log_step("SEND_BTN_REGULAR_CLICK", selector=sel)
                 return True
             except Exception:
                 continue
@@ -796,7 +865,7 @@ def attach_document_with_caption_and_send(driver, pdf_path, caption_text):
                                 )
                             except Exception:
                                 pass
-                    sent = click_send_button(driver)
+                    sent = click_send_button(driver, already_found_btn=btn)
                     if sent:
                         _wait_upload_complete(driver)
                         time.sleep(POST_SEND_ATTACHMENT_PAUSE_SEC)
@@ -847,7 +916,7 @@ def attach_document_with_caption_and_send(driver, pdf_path, caption_text):
                         )
                     except Exception:
                         pass
-            sent = click_send_button(driver)
+            sent = click_send_button(driver, already_found_btn=btn)
             if sent:
                 _wait_upload_complete(driver)
                 time.sleep(POST_SEND_ATTACHMENT_PAUSE_SEC)
