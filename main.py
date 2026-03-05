@@ -641,105 +641,228 @@ def _wait_upload_complete(driver, timeout=120):
 #  4. send_keys() the file path
 #  5. Wait for preview → send
 # ===================================================================
+def _try_drag_drop_file(driver, pdf_path):
+    """
+    FALLBACK: Upload file using JavaScript drag-and-drop simulation.
+    Bypasses the attach menu entirely by:
+    1. Creating a temporary file input
+    2. Loading the file into it via send_keys
+    3. Simulating a drop event on the chat area
+    """
+    abs_path = os.path.abspath(pdf_path)
+    log_step("TRYING_DRAG_DROP", file=os.path.basename(pdf_path))
+
+    try:
+        # Step 1: Create a temporary file input via JS
+        driver.execute_script("""
+            var existing = document.getElementById('__wa_temp_file_input');
+            if (existing) existing.remove();
+            var input = document.createElement('input');
+            input.type = 'file';
+            input.id = '__wa_temp_file_input';
+            input.style.position = 'absolute';
+            input.style.left = '0';
+            input.style.top = '0';
+            input.style.display = 'block';
+            input.style.opacity = '1';
+            input.style.width = '100px';
+            input.style.height = '100px';
+            input.style.zIndex = '99999';
+            document.body.appendChild(input);
+        """)
+        time.sleep(0.3)
+
+        # Step 2: Send the file path to the temp input
+        temp_input = driver.find_element(By.CSS_SELECTOR, "#__wa_temp_file_input")
+        temp_input.send_keys(abs_path)
+        log_step("DRAG_DROP_FILE_LOADED")
+        time.sleep(0.5)
+
+        # Step 3: Simulate drop event on the chat area
+        result = driver.execute_script("""
+            var input = document.getElementById('__wa_temp_file_input');
+            if (!input || !input.files || input.files.length === 0) {
+                return 'NO_FILE_IN_INPUT';
+            }
+            var file = input.files[0];
+
+            // Find the drop target (main chat area)
+            var dropTarget = document.querySelector('#main')
+                || document.querySelector('div[data-tab="10"]')
+                || document.querySelector('footer')
+                || document.querySelector('[role="application"]');
+            if (!dropTarget) {
+                return 'NO_DROP_TARGET';
+            }
+
+            // Create DataTransfer with the file
+            var dataTransfer = new DataTransfer();
+            dataTransfer.items.add(file);
+
+            // Simulate the full drag sequence
+            var dragEnter = new DragEvent('dragenter', {
+                bubbles: true, cancelable: true, dataTransfer: dataTransfer
+            });
+            var dragOver = new DragEvent('dragover', {
+                bubbles: true, cancelable: true, dataTransfer: dataTransfer
+            });
+            var drop = new DragEvent('drop', {
+                bubbles: true, cancelable: true, dataTransfer: dataTransfer
+            });
+
+            dropTarget.dispatchEvent(dragEnter);
+            dropTarget.dispatchEvent(dragOver);
+            dropTarget.dispatchEvent(drop);
+
+            // Clean up
+            input.remove();
+
+            return 'DROP_DISPATCHED:' + file.name + ':' + file.size + ':' + dropTarget.tagName;
+        """)
+
+        log_step("DRAG_DROP_RESULT", result=result)
+
+        if result and "DROP_DISPATCHED" in str(result):
+            time.sleep(2)
+            return True
+
+    except Exception as e:
+        log_step("DRAG_DROP_FAILED", error=str(e))
+
+    return False
+
+
 def attach_document_with_caption_and_send(driver, pdf_path, caption_text):
     abs_path = os.path.abspath(pdf_path)
     log_step("ATTACH_START", file=os.path.basename(pdf_path))
 
-    # === STEP 1: Click the attach button ===
+    # =====================================================
+    # STRATEGY A: Click attach → find file input → send_keys
+    # =====================================================
     ok = _click_attach_button(driver)
     if not ok:
         _save_debug_screenshot(driver, "no_attach_btn")
-        return False
-
-    # === STEP 2: Wait for file input to appear, then send file ===
-    # After clicking "+", WhatsApp adds hidden file inputs to the DOM.
-    # The document input has accept='*'. We find it directly — NO need to
-    # click "Document" menu item (this is the key fix!).
-    time.sleep(1.5)  # Let the menu render and inputs appear
-
-    # Log what inputs appeared after clicking "+"
-    log_step("SCANNING_AFTER_ATTACH_CLICK")
-    _scan_all_file_inputs(driver)
-
-    doc_input = _find_document_input(driver, timeout=8)
-
-    if not doc_input:
-        # Retry: close menu and try again
-        log_step("DOC_INPUT_NOT_FOUND_RETRYING")
-        _save_debug_screenshot(driver, "no_doc_input_attempt1")
-        try:
-            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-            time.sleep(1)
-        except Exception:
-            pass
-        _click_attach_button(driver)
-        time.sleep(2)  # Wait longer this time
+        # Don't return False yet — try drag-drop below
+    else:
+        time.sleep(1.5)
+        log_step("SCANNING_AFTER_ATTACH_CLICK")
         _scan_all_file_inputs(driver)
-        doc_input = _find_document_input(driver, timeout=12)
 
-    if not doc_input:
-        log_step("DOC_INPUT_NOT_FOUND_FINAL")
-        _save_debug_screenshot(driver, "no_doc_input_final")
-        try:
-            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-        except Exception:
-            pass
-        return False
+        doc_input = _find_document_input(driver, timeout=8)
 
-    # === STEP 3: Make input usable and send file path ===
-    input_accept = ""
+        if not doc_input:
+            log_step("DOC_INPUT_NOT_FOUND_RETRYING")
+            _save_debug_screenshot(driver, "no_doc_input_attempt1")
+            try:
+                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                time.sleep(1)
+            except Exception:
+                pass
+            _click_attach_button(driver)
+            time.sleep(2)
+            _scan_all_file_inputs(driver)
+            doc_input = _find_document_input(driver, timeout=12)
+
+        if doc_input:
+            input_accept = ""
+            try:
+                input_accept = doc_input.get_attribute("accept") or ""
+            except Exception:
+                pass
+            log_step("USING_INPUT", accept=input_accept)
+            _make_input_usable(driver, doc_input)
+
+            try:
+                doc_input.send_keys(abs_path)
+                log_step("FILE_SENT_TO_INPUT", path=os.path.basename(pdf_path))
+
+                time.sleep(2)
+                cap, btn = wait_for_preview_ready(driver)
+                if btn:
+                    # Preview appeared! Type caption and send.
+                    if caption_text:
+                        cap_el = cap or focus_caption_box(driver)
+                        if cap_el:
+                            try:
+                                time.sleep(FOCUS_PAUSE_SEC)
+                                driver.execute_script(
+                                    "arguments[0].focus(); "
+                                    "arguments[0].innerHTML = ''; "
+                                    "arguments[0].innerHTML = arguments[1]; "
+                                    "arguments[0].dispatchEvent(new InputEvent('input', "
+                                    "{ bubbles: true, cancelable: true, inputType: 'insertText', "
+                                    "data: arguments[1] }));",
+                                    cap_el, caption_text
+                                )
+                            except Exception:
+                                pass
+                    sent = click_send_button(driver)
+                    if sent:
+                        _wait_upload_complete(driver)
+                        time.sleep(POST_SEND_ATTACHMENT_PAUSE_SEC)
+                        log_step("ATTACH_COMPLETE_STRATEGY_A", file=os.path.basename(pdf_path))
+                        return True
+                    else:
+                        log_step("SEND_FAILED_STRATEGY_A")
+                else:
+                    log_step("PREVIEW_NOT_READY_STRATEGY_A")
+                    _save_debug_screenshot(driver, "no_preview_a")
+            except Exception as e:
+                log_step("FILE_SEND_FAILED_STRATEGY_A", error=str(e))
+        else:
+            log_step("DOC_INPUT_NOT_FOUND_FINAL")
+            _save_debug_screenshot(driver, "no_doc_input_final")
+
+    # Close any open menus before trying Strategy B
     try:
-        input_accept = doc_input.get_attribute("accept") or ""
+        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        time.sleep(0.5)
+        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        time.sleep(0.5)
     except Exception:
         pass
-    log_step("USING_INPUT", accept=input_accept)
-    _make_input_usable(driver, doc_input)
 
-    try:
-        doc_input.send_keys(abs_path)
-        log_step("FILE_SENT_TO_INPUT", path=os.path.basename(pdf_path))
-    except Exception as e:
-        log_step("FILE_SEND_FAILED", error=str(e))
-        _save_debug_screenshot(driver, "send_keys_failed")
-        return False
+    # =====================================================
+    # STRATEGY B: Drag-and-drop file onto chat area
+    # =====================================================
+    log_step("TRYING_STRATEGY_B_DRAG_DROP")
+    if _try_drag_drop_file(driver, pdf_path):
+        # Check if preview appeared
+        time.sleep(2)
+        cap, btn = wait_for_preview_ready(driver)
+        if btn:
+            if caption_text:
+                cap_el = cap or focus_caption_box(driver)
+                if cap_el:
+                    try:
+                        time.sleep(FOCUS_PAUSE_SEC)
+                        driver.execute_script(
+                            "arguments[0].focus(); "
+                            "arguments[0].innerHTML = ''; "
+                            "arguments[0].innerHTML = arguments[1]; "
+                            "arguments[0].dispatchEvent(new InputEvent('input', "
+                            "{ bubbles: true, cancelable: true, inputType: 'insertText', "
+                            "data: arguments[1] }));",
+                            cap_el, caption_text
+                        )
+                    except Exception:
+                        pass
+            sent = click_send_button(driver)
+            if sent:
+                _wait_upload_complete(driver)
+                time.sleep(POST_SEND_ATTACHMENT_PAUSE_SEC)
+                log_step("ATTACH_COMPLETE_STRATEGY_B", file=os.path.basename(pdf_path))
+                return True
+            else:
+                log_step("SEND_FAILED_STRATEGY_B")
+        else:
+            log_step("PREVIEW_NOT_READY_STRATEGY_B")
+            _save_debug_screenshot(driver, "no_preview_b")
 
-    # === STEP 4: Wait for preview screen ===
-    time.sleep(2)
-    cap, btn = wait_for_preview_ready(driver)
-    if btn is None:
-        log_step("PREVIEW_NOT_READY")
-        _save_debug_screenshot(driver, "no_preview")
-        return False
-
-    # === STEP 5: Type caption if needed ===
-    if caption_text:
-        cap_el = cap or focus_caption_box(driver)
-        if cap_el:
-            try:
-                time.sleep(FOCUS_PAUSE_SEC)
-                driver.execute_script(
-                    "arguments[0].focus(); "
-                    "arguments[0].innerHTML = ''; "
-                    "arguments[0].innerHTML = arguments[1]; "
-                    "arguments[0].dispatchEvent(new InputEvent('input', "
-                    "{ bubbles: true, cancelable: true, inputType: 'insertText', data: arguments[1] }));",
-                    cap_el, caption_text
-                )
-                log_step("CAPTION_TYPED")
-            except Exception:
-                log_step("CAPTION_TYPE_FAILED")
-
-    # === STEP 6: Click send ===
-    sent = click_send_button(driver)
-    if not sent:
-        log_step("SEND_FAILED")
-        return False
-
-    # === STEP 7: Wait for upload to complete ===
-    _wait_upload_complete(driver)
-    time.sleep(POST_SEND_ATTACHMENT_PAUSE_SEC)
-    log_step("ATTACH_COMPLETE", file=os.path.basename(pdf_path))
-    return True
+    # All strategies failed
+    log_step("ALL_ATTACH_STRATEGIES_FAILED", file=os.path.basename(pdf_path))
+    _save_debug_screenshot(driver, "all_failed")
+    return False
 
 
 # ---------------------------------------------------------------------------
