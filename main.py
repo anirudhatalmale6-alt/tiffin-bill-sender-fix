@@ -38,6 +38,8 @@ from selenium.common.exceptions import (
     TimeoutException,
     ElementClickInterceptedException,
     ElementNotInteractableException,
+    NoSuchWindowException,
+    WebDriverException,
 )
 
 from config.settings import *
@@ -436,14 +438,57 @@ def _click_attach_button(driver):
     return False
 
 
+def _scan_all_file_inputs(driver):
+    """Scan and log ALL file inputs currently in the DOM."""
+    try:
+        inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+        for i, el in enumerate(inputs):
+            try:
+                acc = el.get_attribute("accept") or ""
+                parent = driver.execute_script(
+                    "return arguments[0].parentElement ? arguments[0].parentElement.tagName : 'NONE'", el
+                )
+                display = driver.execute_script(
+                    "return getComputedStyle(arguments[0]).display", el
+                )
+                log_step("FILE_INPUT_SCAN", index=i, accept=acc, parent=parent, display=display)
+            except Exception:
+                log_step("FILE_INPUT_SCAN", index=i, error="could not read")
+        return inputs
+    except Exception:
+        return []
+
+
 def _find_document_input(driver, timeout=10):
     """
-    Wait for and find the document file input element.
-    Uses WebDriverWait (presence_of, not clickable) since file inputs are hidden.
+    Wait for the document file input (accept='*') to appear after clicking '+'.
+    Uses short per-selector timeouts to avoid hanging for 40+ seconds.
     """
-    for by, sel in DOC_INPUT_SELECTORS:
+    # First, try the primary selector with the full timeout
+    # (this is the one wa-automation uses and should work)
+    try:
+        el = WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "input[type='file'][accept='*']")
+            )
+        )
+        log_step("DOC_INPUT_FOUND", selector="accept=*", accept=el.get_attribute("accept") or "")
+        return el
+    except Exception:
+        pass
+
+    # If primary failed, scan what's actually there
+    log_step("PRIMARY_DOC_INPUT_NOT_FOUND_SCANNING")
+    inputs = _scan_all_file_inputs(driver)
+
+    # Try other document-compatible selectors (quick, 2s each)
+    other_selectors = [
+        (By.CSS_SELECTOR, "input[type='file'][accept='*/*']"),
+        (By.CSS_SELECTOR, "input[type='file'][accept='application/*']"),
+    ]
+    for by, sel in other_selectors:
         try:
-            el = WebDriverWait(driver, timeout).until(
+            el = WebDriverWait(driver, 2).until(
                 EC.presence_of_element_located((by, sel))
             )
             acc = el.get_attribute("accept") or ""
@@ -451,6 +496,23 @@ def _find_document_input(driver, timeout=10):
             return el
         except Exception:
             continue
+
+    # Look through found inputs for any non-image/video input
+    for el in inputs:
+        try:
+            acc = (el.get_attribute("accept") or "").lower()
+            if acc != "image/*" and "image" not in acc and "video" not in acc:
+                log_step("DOC_INPUT_FOUND_BY_EXCLUSION", accept=acc)
+                return el
+        except Exception:
+            pass
+
+    # LAST RESORT: If only image/* input exists, try using it anyway
+    # Some WhatsApp versions accept PDFs through the image input
+    if inputs:
+        log_step("DOC_INPUT_TRYING_IMAGE_INPUT_AS_FALLBACK", count=len(inputs))
+        return inputs[0]
+
     return None
 
 
@@ -593,25 +655,31 @@ def attach_document_with_caption_and_send(driver, pdf_path, caption_text):
     # After clicking "+", WhatsApp adds hidden file inputs to the DOM.
     # The document input has accept='*'. We find it directly — NO need to
     # click "Document" menu item (this is the key fix!).
-    time.sleep(1)  # Let the menu render and inputs appear
+    time.sleep(1.5)  # Let the menu render and inputs appear
 
-    doc_input = _find_document_input(driver, timeout=10)
+    # Log what inputs appeared after clicking "+"
+    log_step("SCANNING_AFTER_ATTACH_CLICK")
+    _scan_all_file_inputs(driver)
+
+    doc_input = _find_document_input(driver, timeout=8)
 
     if not doc_input:
         # Retry: close menu and try again
         log_step("DOC_INPUT_NOT_FOUND_RETRYING")
+        _save_debug_screenshot(driver, "no_doc_input_attempt1")
         try:
             ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-            time.sleep(0.5)
+            time.sleep(1)
         except Exception:
             pass
         _click_attach_button(driver)
         time.sleep(2)  # Wait longer this time
-        doc_input = _find_document_input(driver, timeout=15)
+        _scan_all_file_inputs(driver)
+        doc_input = _find_document_input(driver, timeout=12)
 
     if not doc_input:
         log_step("DOC_INPUT_NOT_FOUND_FINAL")
-        _save_debug_screenshot(driver, "no_doc_input")
+        _save_debug_screenshot(driver, "no_doc_input_final")
         try:
             ActionChains(driver).send_keys(Keys.ESCAPE).perform()
         except Exception:
@@ -619,6 +687,12 @@ def attach_document_with_caption_and_send(driver, pdf_path, caption_text):
         return False
 
     # === STEP 3: Make input usable and send file path ===
+    input_accept = ""
+    try:
+        input_accept = doc_input.get_attribute("accept") or ""
+    except Exception:
+        pass
+    log_step("USING_INPUT", accept=input_accept)
     _make_input_usable(driver, doc_input)
 
     try:
