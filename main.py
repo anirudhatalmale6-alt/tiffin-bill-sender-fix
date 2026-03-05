@@ -337,56 +337,27 @@ def open_chat(driver, phone_e164):
 
 
 # ===================================================================
-# ATTACHMENT FLOW  (THIS IS WHERE THE FIX LIVES)
+# ATTACHMENT FLOW  (v6 — simplified, based on wa-automation approach)
 # ===================================================================
 
-# --- Updated selector lists for 2025-2026 WhatsApp Web ---
-
+# --- Attach button selectors (2025-2026 WhatsApp Web) ---
 ATTACH_BTN_SELECTORS = [
-    # NEW selectors (2025-2026 WhatsApp Web)
-    "span[data-icon='plus']",
-    "div[data-tab='6']",
-    "[data-testid='conversation-clip']",
-    "span[data-icon='attach-menu-plus']",
-    # Original selectors (still tried as fallback)
-    "[data-testid='compose-attach-button']",
-    "[data-testid='attach']",
-    "[data-testid='clip']",
-    "span[data-icon='clip']",
-    "button[aria-label='Attach']",
-    "button[aria-label='Add']",
-    "div[aria-label='Attach']",
-    "div[aria-label='Add']",
-    "div[title='Attach']",
-    "button[title='Attach']",
+    (By.CSS_SELECTOR, "div[data-tab='6']"),          # Confirmed working
+    (By.CSS_SELECTOR, "span[data-icon='plus']"),
+    (By.CSS_SELECTOR, "span[data-icon='clip']"),
+    (By.CSS_SELECTOR, "[data-testid='conversation-clip']"),
+    (By.CSS_SELECTOR, "button[title='Attach']"),
+    (By.XPATH, "//span[@data-icon='plus']"),
+    (By.XPATH, "//span[@data-icon='clip']"),
+    (By.XPATH, "//div[@title='Attach']"),
 ]
 
-DOC_OPTION_CSS_SELECTORS = [
-    # Click the "Document" menu item after opening the attach menu
-    "[data-testid='mi-attach-document']",
-    "[data-testid='attach-document']",
-    "span[data-testid='attach-document']",
-    "span[data-icon='attach-document']",
-    "span[data-icon='doc']",
-    "button[aria-label='Document']",
-    "li[data-animate-dropdown-item='true'] span[data-icon='attach-document']",
-    "div[aria-label='Document']",
-    "li button[aria-label='Document']",
-    # Generic menu item selectors
-    "li[data-animate-dropdown-item] button",
-]
-
-DOC_OPTION_XPATH_SELECTORS = [
-    # XPath text-based selectors (language-independent fallbacks)
-    "//span[text()='Document']",
-    "//button[.//span[text()='Document']]",
-    "//li[.//span[text()='Document']]",
-    "//div[text()='Document']",
-    "//span[contains(text(),'Document')]",
-    "//span[contains(text(),'document')]",
-    # Try the first menu item (Document is usually first)
-    "(//li[@data-animate-dropdown-item='true'])[1]",
-    "(//li[@role='button' or @role='menuitem'])[1]",
+# --- Document file input selectors (the hidden input with accept='*') ---
+DOC_INPUT_SELECTORS = [
+    (By.CSS_SELECTOR, "input[type='file'][accept='*']"),
+    (By.CSS_SELECTOR, "input[type='file']:not([accept*='image']):not([accept*='video'])"),
+    (By.CSS_SELECTOR, "input[type='file'][accept='*/*']"),
+    (By.CSS_SELECTOR, "input[type='file']"),  # Last resort: any file input
 ]
 
 SEND_BTN_SELECTORS = [
@@ -410,74 +381,36 @@ def _save_debug_screenshot(driver, label="debug"):
 
     try:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dom_path = os.path.join("./logs", f"dom_dump_{label}_{ts}.html")
-        # Dump just the relevant portion of the DOM (near the attach area)
+        dom_path = os.path.join("./logs", f"dom_dump_{label}_{ts}.txt")
         dom_info = driver.execute_script("""
             var result = '';
-            // Dump all file inputs
             var inputs = document.querySelectorAll('input[type="file"]');
             result += '=== FILE INPUTS (' + inputs.length + ') ===\\n';
             for (var i = 0; i < inputs.length; i++) {
                 result += 'INPUT[' + i + ']: accept=' + (inputs[i].accept||'NONE')
                     + ' display=' + getComputedStyle(inputs[i]).display
-                    + ' id=' + (inputs[i].id||'')
-                    + ' name=' + (inputs[i].name||'')
-                    + ' parent=' + (inputs[i].parentElement ? inputs[i].parentElement.tagName + '.' + inputs[i].parentElement.className : 'NONE')
+                    + ' parent=' + (inputs[i].parentElement ? inputs[i].parentElement.tagName + '.' + (inputs[i].parentElement.className||'').substring(0,60) : 'NONE')
                     + '\\n';
             }
-
-            // Dump all elements with data-testid containing 'attach'
-            var testids = document.querySelectorAll('[data-testid*="attach"]');
-            result += '\\n=== DATA-TESTID ATTACH (' + testids.length + ') ===\\n';
-            for (var i = 0; i < testids.length; i++) {
-                result += testids[i].tagName + ' testid=' + testids[i].getAttribute('data-testid')
-                    + ' text=' + (testids[i].textContent||'').substring(0,50) + '\\n';
-            }
-
-            // Dump all elements with data-icon
             var icons = document.querySelectorAll('[data-icon]');
             result += '\\n=== DATA-ICON (' + icons.length + ') ===\\n';
             for (var i = 0; i < icons.length; i++) {
                 result += icons[i].tagName + ' icon=' + icons[i].getAttribute('data-icon') + '\\n';
             }
-
-            // Dump all li elements visible (possible menu items)
-            var lis = document.querySelectorAll('li');
-            result += '\\n=== LI ELEMENTS (' + lis.length + ') ===\\n';
-            for (var i = 0; i < lis.length; i++) {
-                var style = getComputedStyle(lis[i]);
-                if (style.display !== 'none' && style.visibility !== 'hidden') {
-                    result += 'LI[' + i + ']: text=' + (lis[i].textContent||'').substring(0,60).replace(/\\n/g,' ')
-                        + ' role=' + (lis[i].getAttribute('role')||'')
-                        + ' data-animate=' + (lis[i].getAttribute('data-animate-dropdown-item')||'')
-                        + '\\n';
+            var tabs = document.querySelectorAll('[data-tab]');
+            result += '\\n=== DATA-TAB (' + tabs.length + ') ===\\n';
+            for (var i = 0; i < tabs.length; i++) {
+                result += tabs[i].tagName + ' tab=' + tabs[i].getAttribute('data-tab')
+                    + ' aria=' + (tabs[i].getAttribute('aria-label')||'') + '\\n';
+            }
+            var testids = document.querySelectorAll('[data-testid]');
+            result += '\\n=== DATA-TESTID (' + testids.length + ') ===\\n';
+            for (var i = 0; i < testids.length; i++) {
+                var t = testids[i].getAttribute('data-testid');
+                if (t.indexOf('attach') >= 0 || t.indexOf('clip') >= 0 || t.indexOf('send') >= 0 || t.indexOf('doc') >= 0 || t.indexOf('file') >= 0) {
+                    result += testids[i].tagName + ' testid=' + t + '\\n';
                 }
             }
-
-            // Dump elements with role=menu, role=listbox, role=dialog
-            var menus = document.querySelectorAll('[role="menu"], [role="listbox"], [role="dialog"], [role="application"]');
-            result += '\\n=== MENU/DIALOG ELEMENTS (' + menus.length + ') ===\\n';
-            for (var i = 0; i < menus.length; i++) {
-                result += menus[i].tagName + ' role=' + menus[i].getAttribute('role')
-                    + ' class=' + (menus[i].className||'').substring(0,60)
-                    + ' children=' + menus[i].children.length
-                    + '\\n';
-            }
-
-            // Dump all buttons and clickable divs in the bottom area
-            var btns = document.querySelectorAll('button, div[role="button"]');
-            result += '\\n=== BUTTONS (' + btns.length + ') ===\\n';
-            for (var i = 0; i < btns.length; i++) {
-                var b = btns[i];
-                var rect = b.getBoundingClientRect();
-                if (rect.width > 0 && rect.height > 0) {
-                    result += b.tagName + ' aria=' + (b.getAttribute('aria-label')||'')
-                        + ' text=' + (b.textContent||'').substring(0,40).replace(/\\n/g,' ')
-                        + ' pos=' + Math.round(rect.x) + ',' + Math.round(rect.y)
-                        + '\\n';
-                }
-            }
-
             return result;
         """)
         with open(dom_path, "w", encoding="utf-8") as f:
@@ -487,210 +420,42 @@ def _save_debug_screenshot(driver, label="debug"):
         log_step("DOM_DUMP_FAILED", error=str(e))
 
 
-def _find_all_file_inputs(driver):
-    """Find all file inputs in the page and log their details."""
-    inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
-    details = []
-    for i, el in enumerate(inputs):
-        try:
-            acc = el.get_attribute("accept") or ""
-            name = el.get_attribute("name") or ""
-            multiple = el.get_attribute("multiple") or ""
-            parent_tag = driver.execute_script(
-                "return arguments[0].parentElement ? arguments[0].parentElement.tagName : 'NONE'", el
-            )
-            details.append({
-                "index": i, "accept": acc, "name": name,
-                "multiple": multiple, "parent": parent_tag
-            })
-        except Exception:
-            details.append({"index": i, "error": "could not read attributes"})
-    return inputs, details
-
-
-def click_attach_menu(driver):
-    """Click the paperclip / '+' button to open the attachment menu."""
-    for sel in ATTACH_BTN_SELECTORS:
+def _click_attach_button(driver):
+    """Click the '+' / paperclip attach button. Returns True on success."""
+    for by, sel in ATTACH_BTN_SELECTORS:
         try:
             btn = WebDriverWait(driver, 3).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
+                EC.element_to_be_clickable((by, sel))
             )
             btn.click()
-            log_step("ATTACH_MENU_CLICKED", selector=sel)
-            time.sleep(1.0)  # Give menu time to fully render
+            log_step("ATTACH_BTN_CLICKED", selector=sel)
             return True
         except Exception:
             continue
-    log_step("ATTACH_MENU_NOT_FOUND")
+    log_step("ATTACH_BTN_NOT_FOUND")
     return False
 
 
-def _click_document_option(driver):
+def _find_document_input(driver, timeout=10):
     """
-    After opening the attach menu, click the 'Document' option.
-    Uses multiple strategies: CSS selectors, XPath, JS text search, and coordinate click.
+    Wait for and find the document file input element.
+    Uses WebDriverWait (presence_of, not clickable) since file inputs are hidden.
     """
-    time.sleep(1.5)  # Wait longer for menu animation to complete
-
-    # Strategy 1: CSS selectors
-    for sel in DOC_OPTION_CSS_SELECTORS:
+    for by, sel in DOC_INPUT_SELECTORS:
         try:
-            btn = WebDriverWait(driver, 2).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
+            el = WebDriverWait(driver, timeout).until(
+                EC.presence_of_element_located((by, sel))
             )
-            btn.click()
-            log_step("DOC_OPTION_CLICKED_CSS", selector=sel)
-            time.sleep(0.5)
-            return True
+            acc = el.get_attribute("accept") or ""
+            log_step("DOC_INPUT_FOUND", selector=sel, accept=acc)
+            return el
         except Exception:
             continue
-
-    # Strategy 2: XPath selectors (text-based)
-    for sel in DOC_OPTION_XPATH_SELECTORS:
-        try:
-            btn = WebDriverWait(driver, 2).until(
-                EC.element_to_be_clickable((By.XPATH, sel))
-            )
-            btn.click()
-            log_step("DOC_OPTION_CLICKED_XPATH", selector=sel)
-            time.sleep(0.5)
-            return True
-        except Exception:
-            continue
-
-    # Strategy 3: JavaScript — find by text content "Document" (case-insensitive, multi-language)
-    try:
-        clicked = driver.execute_script("""
-            var keywords = ['Document', 'document', 'DOCUMENT', 'Documento', 'Dokument'];
-            // Search ALL elements for matching text
-            var all = document.querySelectorAll('*');
-            for (var k = 0; k < keywords.length; k++) {
-                for (var i = 0; i < all.length; i++) {
-                    var el = all[i];
-                    // Check direct text content (not children text)
-                    var directText = '';
-                    for (var j = 0; j < el.childNodes.length; j++) {
-                        if (el.childNodes[j].nodeType === 3) directText += el.childNodes[j].textContent;
-                    }
-                    directText = directText.trim();
-                    if (directText === keywords[k]) {
-                        // Click the element or its closest clickable parent
-                        var target = el.closest('li, button, div[role="button"], a') || el;
-                        target.click();
-                        return 'JS_DIRECT:' + target.tagName + ':' + directText;
-                    }
-                }
-            }
-            // Fallback: aria-label
-            var labeled = document.querySelectorAll('[aria-label*="ocument"], [aria-label*="OCUMENT"]');
-            if (labeled.length > 0) {
-                var t = labeled[0].closest('li, button, div[role="button"]') || labeled[0];
-                t.click();
-                return 'JS_ARIA:' + t.tagName + ':' + labeled[0].getAttribute('aria-label');
-            }
-            return null;
-        """)
-        if clicked:
-            log_step("DOC_OPTION_CLICKED_JS", method=clicked)
-            time.sleep(0.5)
-            return True
-    except Exception:
-        pass
-
-    # Strategy 4: Click the first menu item (Document is usually first in the list)
-    try:
-        items = driver.find_elements(By.CSS_SELECTOR,
-            "ul li, div[role='listbox'] > div, div[role='menu'] > div, "
-            "[data-animate-dropdown-item], li[tabindex]")
-        if items:
-            items[0].click()
-            log_step("DOC_OPTION_CLICKED_FIRST_ITEM", count=len(items))
-            time.sleep(0.5)
-            return True
-    except Exception:
-        pass
-
-    # Strategy 5: Click by position relative to the attach button
-    # Document is typically the first (top) item in the menu above the attach button
-    try:
-        attach_btn = None
-        for sel in ATTACH_BTN_SELECTORS[:4]:
-            try:
-                attach_btn = driver.find_element(By.CSS_SELECTOR, sel)
-                if attach_btn:
-                    break
-            except Exception:
-                continue
-        if attach_btn:
-            # The menu opens ABOVE the button. Document is typically the first item.
-            # Try clicking at various offsets above the button
-            for y_offset in [-200, -180, -160, -140, -120, -100, -250, -300]:
-                try:
-                    ActionChains(driver).move_to_element_with_offset(
-                        attach_btn, 0, y_offset
-                    ).click().perform()
-                    time.sleep(0.5)
-                    # Check if a file input appeared
-                    new_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
-                    if new_inputs:
-                        log_step("DOC_OPTION_CLICKED_OFFSET", y_offset=y_offset, inputs=len(new_inputs))
-                        return True
-                except Exception:
-                    continue
-    except Exception:
-        pass
-
-    log_step("DOC_OPTION_NOT_FOUND_CONTINUING")
-    return False
+    return None
 
 
-def locate_document_input(driver):
-    """Find the hidden <input type='file'> for documents (not images/video)."""
-
-    inputs, details = _find_all_file_inputs(driver)
-    log_step("FILE_INPUTS_SCAN", total=len(inputs), details=str(details))
-
-    if not inputs:
-        return None
-
-    # Priority 1: Input with accept='*' (document input in WhatsApp)
-    for el in inputs:
-        try:
-            acc = (el.get_attribute("accept") or "").strip()
-            if acc == "*":
-                log_step("FILE_INPUT_FOUND", match="accept=*")
-                return el
-        except Exception:
-            pass
-
-    # Priority 2: Input that accepts documents/PDFs/any
-    for el in inputs:
-        try:
-            acc = (el.get_attribute("accept") or "").lower().strip()
-            if acc in ("*/*", "") or "application" in acc or ".pdf" in acc:
-                # But skip if it's clearly image/video only
-                if "image" not in acc and "video" not in acc:
-                    log_step("FILE_INPUT_FOUND", match=f"accept={acc}")
-                    return el
-        except Exception:
-            pass
-
-    # Priority 3: Any input that's NOT image/video
-    for el in inputs:
-        try:
-            acc = (el.get_attribute("accept") or "").lower()
-            if "image" not in acc and "video" not in acc:
-                log_step("FILE_INPUT_FOUND", match=f"non-media accept={acc}")
-                return el
-        except Exception:
-            pass
-
-    # Priority 4: Last resort — use ANY file input
-    log_step("FILE_INPUT_USING_ANY_AVAILABLE")
-    return inputs[-1]
-
-
-def make_input_visible(driver, el):
+def _make_input_usable(driver, el):
+    """Make a hidden file input usable by Selenium."""
     try:
         driver.execute_script("""
             var el = arguments[0];
@@ -701,7 +466,6 @@ def make_input_visible(driver, el):
             el.style.height = '1px';
             el.style.position = 'absolute';
             el.removeAttribute('hidden');
-            // Remove any disabled attribute
             el.removeAttribute('disabled');
         """, el)
     except Exception:
@@ -717,7 +481,7 @@ def wait_for_preview_ready(driver):
                 By.CSS_SELECTOR,
                 "div[aria-placeholder='Add a caption'][contenteditable='true'], "
                 "div[contenteditable='true'][data-lexical-editor='true'], "
-                "div[aria-placeholder='Type a message'][contenteditable='true']",
+                "div[contenteditable='true'][data-tab='undefined']",
             ))
         )
         log_step("PREVIEW_CAPTION_VISIBLE")
@@ -780,9 +544,6 @@ def click_send_button(driver):
         except ElementClickInterceptedException:
             try:
                 btn = driver.find_element(By.CSS_SELECTOR, sel)
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'center'});", btn
-                )
                 driver.execute_script("arguments[0].click();", btn)
                 log_step("SEND_BTN_JS_CLICK", selector=sel)
                 return True
@@ -790,210 +551,121 @@ def click_send_button(driver):
                 continue
         except Exception:
             continue
+    log_step("SEND_BTN_FAILED")
+    return False
 
-    # Final fallback: original selector
+
+def _wait_upload_complete(driver, timeout=120):
+    """Wait until WhatsApp finishes uploading the file (spinning icon disappears)."""
     try:
-        btn = driver.find_element(
-            By.CSS_SELECTOR, "div[role='button'][aria-label='Send']"
+        # Wait for upload spinner to appear then disappear
+        WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "svg.x9tu13d.x1bndym7"))
         )
-        driver.execute_script("arguments[0].click();", btn)
-        log_step("SEND_BTN_FALLBACK_CLICK")
-        return True
-    except Exception:
-        log_step("SEND_BTN_FAILED")
-        return False
-
-
-def wait_preview_closed(driver):
-    """Wait until the file-preview overlay is gone."""
-    try:
-        WebDriverWait(driver, PREVIEW_CLOSE_TIMEOUT, poll_frequency=0.5).until_not(
-            EC.visibility_of_element_located(
-                (By.CSS_SELECTOR, "div[role='button'][aria-label='Send']")
-            )
+        WebDriverWait(driver, timeout).until_not(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "svg.x9tu13d.x1bndym7"))
         )
-        return True
     except TimeoutException:
-        return False
-
-
-# ===================================================================
-#  MAIN ATTACH + SEND  (FIXED — v5 with multi-strategy approach)
-# ===================================================================
-def _try_send_file_to_input(driver, file_input, pdf_path):
-    """Try to send a file path to a file input element."""
-    make_input_visible(driver, file_input)
-    abs_path = os.path.abspath(pdf_path)
-
-    try:
-        file_input.send_keys(abs_path)
-        log_step("FILE_INPUT_SENT", path=os.path.basename(pdf_path))
-        return True
-    except Exception:
         pass
 
-    # Retry with JS to remove restrictions
-    try:
-        driver.execute_script("""
-            var el = arguments[0];
-            el.style.display = 'block';
-            el.style.visibility = 'visible';
-            el.style.position = 'absolute';
-            el.style.left = '0';
-            el.style.top = '0';
-            el.style.width = '100px';
-            el.style.height = '100px';
-            el.style.opacity = '1';
-            el.removeAttribute('hidden');
-            el.removeAttribute('disabled');
-        """, file_input)
-        time.sleep(0.3)
-        file_input.send_keys(abs_path)
-        log_step("FILE_INPUT_SENT_RETRY", path=os.path.basename(pdf_path))
-        return True
-    except Exception as e:
-        log_step("FILE_INPUT_SEND_FAILED", error=str(e))
-        return False
 
-
+# ===================================================================
+#  MAIN ATTACH + SEND  (v6 — simplified proven approach)
+#
+#  Based on working wa-automation library approach:
+#  1. Click attach button (div[data-tab='6'])
+#  2. Wait for file inputs to appear
+#  3. Find input[type='file'][accept='*'] directly (NO Document click needed!)
+#  4. send_keys() the file path
+#  5. Wait for preview → send
+# ===================================================================
 def attach_document_with_caption_and_send(driver, pdf_path, caption_text):
-    started = time.time()
+    abs_path = os.path.abspath(pdf_path)
+    log_step("ATTACH_START", file=os.path.basename(pdf_path))
 
-    # === STRATEGY A: Check if file inputs already exist in DOM (before clicking anything) ===
-    pre_inputs, pre_details = _find_all_file_inputs(driver)
-    log_step("PRE_CLICK_FILE_INPUTS", count=len(pre_inputs), details=str(pre_details))
-
-    # If document-compatible inputs exist, try using them directly
-    if pre_inputs:
-        doc_input = None
-        for el in pre_inputs:
-            try:
-                acc = (el.get_attribute("accept") or "").strip().lower()
-                if acc == "*" or acc == "" or "application" in acc or ".pdf" in acc:
-                    if "image" not in acc and "video" not in acc:
-                        doc_input = el
-                        break
-            except Exception:
-                pass
-
-        if doc_input:
-            log_step("TRYING_DIRECT_INPUT_NO_MENU")
-            if _try_send_file_to_input(driver, doc_input, pdf_path):
-                # Check if preview appeared
-                time.sleep(2)
-                cap, btn = wait_for_preview_ready(driver)
-                if btn:
-                    log_step("DIRECT_INPUT_WORKED")
-                    if caption_text:
-                        cap_el = cap or focus_caption_box(driver)
-                        if cap_el:
-                            try:
-                                time.sleep(FOCUS_PAUSE_SEC)
-                                cap_el.send_keys(caption_text)
-                            except Exception:
-                                pass
-                    sent = click_send_button(driver)
-                    if sent:
-                        wait_preview_closed(driver)
-                        time.sleep(POST_SEND_ATTACHMENT_PAUSE_SEC)
-                        return True
-
-    # === STRATEGY B: Click attach menu → Click Document → Find file input ===
-    log_step("TRYING_MENU_APPROACH")
-    ok = click_attach_menu(driver)
+    # === STEP 1: Click the attach button ===
+    ok = _click_attach_button(driver)
     if not ok:
         _save_debug_screenshot(driver, "no_attach_btn")
         return False
 
-    # Record inputs before clicking Document
-    inputs_before = set()
-    for el in driver.find_elements(By.CSS_SELECTOR, "input[type='file']"):
+    # === STEP 2: Wait for file input to appear, then send file ===
+    # After clicking "+", WhatsApp adds hidden file inputs to the DOM.
+    # The document input has accept='*'. We find it directly — NO need to
+    # click "Document" menu item (this is the key fix!).
+    time.sleep(1)  # Let the menu render and inputs appear
+
+    doc_input = _find_document_input(driver, timeout=10)
+
+    if not doc_input:
+        # Retry: close menu and try again
+        log_step("DOC_INPUT_NOT_FOUND_RETRYING")
         try:
-            inputs_before.add(el.id or id(el))
+            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+            time.sleep(0.5)
         except Exception:
             pass
+        _click_attach_button(driver)
+        time.sleep(2)  # Wait longer this time
+        doc_input = _find_document_input(driver, timeout=15)
 
-    doc_clicked = _click_document_option(driver)
+    if not doc_input:
+        log_step("DOC_INPUT_NOT_FOUND_FINAL")
+        _save_debug_screenshot(driver, "no_doc_input")
+        try:
+            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        except Exception:
+            pass
+        return False
 
-    # Wait and look for file input
-    file_input = None
-    for attempt in range(20):
-        file_input = locate_document_input(driver)
-        if file_input:
-            break
-        time.sleep(0.5)
-        # After 10 attempts, retry the full flow
-        if attempt == 10 and not doc_clicked:
-            log_step("RETRYING_ATTACH_FLOW")
-            try:
-                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-                time.sleep(0.5)
-            except Exception:
-                pass
-            click_attach_menu(driver)
-            _click_document_option(driver)
+    # === STEP 3: Make input usable and send file path ===
+    _make_input_usable(driver, doc_input)
 
-    if file_input:
-        if _try_send_file_to_input(driver, file_input, pdf_path):
-            cap, btn = wait_for_preview_ready(driver)
-            if btn:
-                if caption_text:
-                    cap_el = cap or focus_caption_box(driver)
-                    if cap_el:
-                        try:
-                            time.sleep(FOCUS_PAUSE_SEC)
-                            cap_el.send_keys(caption_text)
-                        except Exception:
-                            pass
-                sent = click_send_button(driver)
-                if sent:
-                    wait_preview_closed(driver)
-                    time.sleep(POST_SEND_ATTACHMENT_PAUSE_SEC)
-                    return True
-            else:
-                log_step("PREVIEW_NOT_READY_AFTER_FILE_SEND")
-
-    # === STRATEGY C: JavaScript-based file input creation and dispatch ===
-    log_step("TRYING_JS_FILE_INPUT_INJECTION")
     try:
-        # Close any open menus first
-        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-        time.sleep(0.5)
-
-        # Click attach menu again
-        click_attach_menu(driver)
-        time.sleep(1.5)
-
-        # Use JS to find and trigger the document file input
-        result = driver.execute_script("""
-            // Find ALL file inputs and return info about each
-            var inputs = document.querySelectorAll('input[type="file"]');
-            var info = [];
-            for (var i = 0; i < inputs.length; i++) {
-                info.push({
-                    accept: inputs[i].accept || '',
-                    id: inputs[i].id || '',
-                    display: getComputedStyle(inputs[i]).display,
-                    parentHTML: inputs[i].parentElement ? inputs[i].parentElement.outerHTML.substring(0, 200) : ''
-                });
-            }
-            return JSON.stringify(info);
-        """)
-        log_step("JS_FILE_INPUT_INFO", info=result)
+        doc_input.send_keys(abs_path)
+        log_step("FILE_SENT_TO_INPUT", path=os.path.basename(pdf_path))
     except Exception as e:
-        log_step("JS_INJECTION_FAILED", error=str(e))
+        log_step("FILE_SEND_FAILED", error=str(e))
+        _save_debug_screenshot(driver, "send_keys_failed")
+        return False
 
-    # === SAVE DEBUG INFO ON FAILURE ===
-    log_step("ALL_STRATEGIES_FAILED")
-    _save_debug_screenshot(driver, "attach_failed")
+    # === STEP 4: Wait for preview screen ===
+    time.sleep(2)
+    cap, btn = wait_for_preview_ready(driver)
+    if btn is None:
+        log_step("PREVIEW_NOT_READY")
+        _save_debug_screenshot(driver, "no_preview")
+        return False
 
-    # Close menu before returning
-    try:
-        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-    except Exception:
-        pass
+    # === STEP 5: Type caption if needed ===
+    if caption_text:
+        cap_el = cap or focus_caption_box(driver)
+        if cap_el:
+            try:
+                time.sleep(FOCUS_PAUSE_SEC)
+                driver.execute_script(
+                    "arguments[0].focus(); "
+                    "arguments[0].innerHTML = ''; "
+                    "arguments[0].innerHTML = arguments[1]; "
+                    "arguments[0].dispatchEvent(new InputEvent('input', "
+                    "{ bubbles: true, cancelable: true, inputType: 'insertText', data: arguments[1] }));",
+                    cap_el, caption_text
+                )
+                log_step("CAPTION_TYPED")
+            except Exception:
+                log_step("CAPTION_TYPE_FAILED")
 
-    return False
+    # === STEP 6: Click send ===
+    sent = click_send_button(driver)
+    if not sent:
+        log_step("SEND_FAILED")
+        return False
+
+    # === STEP 7: Wait for upload to complete ===
+    _wait_upload_complete(driver)
+    time.sleep(POST_SEND_ATTACHMENT_PAUSE_SEC)
+    log_step("ATTACH_COMPLETE", file=os.path.basename(pdf_path))
+    return True
 
 
 # ---------------------------------------------------------------------------
